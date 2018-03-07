@@ -5,17 +5,16 @@ import { Wrapper as OSS } from 'ali-oss';
 export interface AliOssAPIResource {
     name: string;
     path: string;
-    sha: string;
     size: number;
     url: string;
-    html_url: string;
-    git_url: string;
-    download_url: string;
+    download_url?: string;
     type: 'file' | 'dir';
+    last_modified: string;
+    etag: string;
+    storage_class: string;
+    storage_type: string;
     _links: {
         self: string;
-        git: string;
-        html: string;
     };
 }
 export declare class AliOssFileSystem extends webdav.FileSystem {
@@ -36,7 +35,7 @@ export declare class AliOssFileSystem extends webdav.FileSystem {
         };
     };
     constructor(region: string, bucket: string, accessKeyId: string, accessKeySecret: string);
-    protected _parse(subPath: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>): void;
+    protected _parse(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>): void;
     protected _openReadStream?(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void;
     protected _lockManager(path: webdav.Path, ctx: webdav.LockManagerInfo, callback: webdav.ReturnCallback<webdav.ILockManager>): void;
     protected _propertyManager(path: webdav.Path, ctx: webdav.PropertyManagerInfo, callback: webdav.ReturnCallback<webdav.IPropertyManager>): void;

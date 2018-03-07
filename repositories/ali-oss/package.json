@@ -11,7 +11,7 @@
     "server",
     "github"
   ],
-  "version": "1.0.1",
+  "version": "0.0.1",
   "author": "Adrien Castex <adrien.castex@gmail.com>",
   "license": "Unlicense",
   "repository": {
@@ -21,13 +21,15 @@
   "description": "GitHub file system for webdav-server",
   "dependencies": {
     "ali-oss": "^4.12.2",
+    "debug": "^3.1.0",
     "request": "^2.81.0",
-    "webdav-server": "^2.0.9"
+    "webdav-server": "^2.3.16",
+    "xml-js-builder": "^1.0.1"
   },
   "devDependencies": {
     "@types/node": "^8.0.9",
     "@types/request": "0.0.45"
   },
   "types": "./lib/exports.d.ts",
-  "name": "@webdav-server/github"
+  "name": "@webdav-server/ali-oss"
 }

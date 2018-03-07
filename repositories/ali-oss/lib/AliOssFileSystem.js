@@ -14,6 +14,9 @@ var AliOssSerializer_1 = require("./AliOssSerializer");
 var webdav_server_1 = require("webdav-server");
 var request = require("request");
 var ali_oss_1 = require("ali-oss");
+var DEBUG = require("debug");
+var xml_js_builder_1 = require("xml-js-builder");
+var debug = DEBUG('ali-oss');
 var AliOssFileSystem = /** @class */ (function (_super) {
     __extends(AliOssFileSystem, _super);
     function AliOssFileSystem(region, bucket, accessKeyId, accessKeySecret) {
@@ -27,42 +30,68 @@ var AliOssFileSystem = /** @class */ (function (_super) {
         _this.base = 'https://api.github.com/repos/' + region + '/' + bucket + '/contents';
         if (_this.base.lastIndexOf('/') === _this.base.length - 1)
             _this.base = _this.base.substring(0, _this.base.length - 1);
-        _this.client = new ali_oss_1.Wrapper({});
+        _this.client = new ali_oss_1.Wrapper({ region: region, bucket: bucket, accessKeyId: accessKeyId, accessKeySecret: accessKeySecret });
         return _this;
     }
-    AliOssFileSystem.prototype._parse = function (subPath, callback) {
+    AliOssFileSystem.prototype._parse = function (path, callback) {
         var _this = this;
-        var url = this.base + subPath.toString();
+        debug('EXEC: _parse', path.toString());
+        debug('EXEC:isROOT ?', path.isRoot());
+        var url = path.toString();
+        url = url.startsWith('/') ? url.slice(1) : url;
         var cached = this.cache[url];
         if (cached && cached.date + 5000 < Date.now())
             return callback(cached.error, cached.body);
-        request({
-            url: url,
-            method: 'GET',
-            qs: {
-                'accessKeyId': this.accessKeyId,
-                'accessKeySecret': this.accessKeySecret
-            },
-            headers: {
-                'user-agent': 'webdav-server'
-            }
-        }, function (e, res, body) {
+        this.client.list({
+            "prefix": url,
+            "delimiter": "/"
+        }).then(function (res) {
+            var e, body = [];
+            debug('RES:', res);
             if (res.statusCode === 404)
                 e = webdav_server_1.v2.Errors.ResourceNotFound;
-            if (body)
-                body = JSON.parse(body);
-            if (!e && body.message)
-                e = new Error(body.message);
+            if (res.objects && res.objects.length > 0)
+                body.concat(res.objects.map(function (obj) { return ({
+                    name: obj.name.split('/').splice(-2).join(''),
+                    path: obj.name,
+                    size: obj.size,
+                    url: obj.url,
+                    etag: obj.etag,
+                    last_modified: obj.lastModified,
+                    storage_class: obj.storageClass,
+                    storage_type: obj.type,
+                    type: obj.name.endsWith('/') ? 'dir' : 'file',
+                    _links: {
+                        self: obj.url
+                    }
+                }); }));
+            if (res.prefixes && res.prefixes.length > 0) {
+                body.concat(res.prefixes.map(function (obj) { return ({
+                    name: obj.split('/').splice(-2).join(''),
+                    path: obj,
+                    size: 0,
+                    type: 'dir',
+                }); }));
+            }
             _this.cache[url] = {
                 body: body,
                 error: e,
                 date: Date.now()
             };
             callback(e, body);
+        }).catch(function (e) {
+            debug('ERROR:', e);
+            _this.cache[url] = {
+                body: null,
+                error: e,
+                date: Date.now()
+            };
+            callback(e);
         });
     };
     AliOssFileSystem.prototype._openReadStream = function (path, ctx, callback) {
         var _this = this;
+        debug('EXEC: _openReadStream', path.toString());
         this._parse(path, function (e, data) {
             if (e)
                 return callback(e);
@@ -84,10 +113,12 @@ var AliOssFileSystem = /** @class */ (function (_super) {
         });
     };
     AliOssFileSystem.prototype._lockManager = function (path, ctx, callback) {
+        debug('EXEC: _lockManager', path.toString());
         callback(null, new webdav_server_1.v2.LocalLockManager());
     };
     AliOssFileSystem.prototype._propertyManager = function (path, ctx, callback) {
         var _this = this;
+        debug('EXEC: _propertyManager', path.toString());
         if (path.isRoot()) {
             var props = this.properties[path.toString()];
             if (!props) {
@@ -109,21 +140,19 @@ var AliOssFileSystem = /** @class */ (function (_super) {
                 if (file.name === path.fileName()) {
                     var github_1 = [];
                     var create = function (name, value) {
-                        var el = webdav_server_1.v2.XML.createElement(name);
+                        var el = xml_js_builder_1.XMLElementBuilder.createElement(name);
                         if (value !== null && value !== undefined)
                             el.add(value);
                         github_1.push(el);
                     };
                     create('json', JSON.stringify(file));
                     create('path', file.path);
-                    create('sha', file.sha);
+                    create('etag', file.etag);
                     create('size', file.size);
                     create('url', file.url);
-                    create('html-url', file.html_url);
-                    create('git-url', file.git_url);
                     create('download-url', file.download_url);
                     create('type', file.type);
-                    var links = webdav_server_1.v2.XML.createElement('links');
+                    var links = xml_js_builder_1.XMLElementBuilder.createElement('links');
                     for (var name_1 in file._links)
                         links.ele(name_1).add(file._links[name_1]);
                     props.setProperty('github', github_1, undefined, function (e) {
@@ -142,20 +171,33 @@ var AliOssFileSystem = /** @class */ (function (_super) {
         });
     };
     AliOssFileSystem.prototype._readDir = function (path, ctx, callback) {
-        this._parse(path, function (e, data) {
-            if (e)
-                return callback(e);
-            if (data.constructor !== Array)
-                return callback(webdav_server_1.v2.Errors.InvalidOperation);
-            callback(null, data.map(function (r) { return r.name; }));
-        });
+        debug('EXEC: _readDir', path.toString());
+        var url = path.toString();
+        url = url.startsWith('/') ? url.slice(1) : url;
+        this.client.list({
+            prefix: url,
+            delimiter: '/'
+        }).then(function (res) {
+            var e, body = [];
+            if (res.statusCode === 404)
+                e = webdav_server_1.v2.Errors.ResourceNotFound;
+            if (res.objects && res.objects.length > 0)
+                body.concat(res.objects.map(function (obj) { return obj.name; }));
+            if (res.prefixes && res.prefixes.length > 0) {
+                body.concat(res.prefixes);
+            }
+            debug('READ DIR:', body);
+            callback(e, body);
+        }).catch(callback);
     };
     AliOssFileSystem.prototype._size = function (path, ctx, callback) {
+        debug('EXEC: _size', path.toString());
         this._parse(path, function (e, data) {
             callback(e, data && data.constructor !== Array ? data.size : undefined);
         });
     };
     AliOssFileSystem.prototype._type = function (path, ctx, callback) {
+        debug('EXEC: _size', path.toString());
         if (path.isRoot())
             return callback(null, webdav_server_1.v2.ResourceType.Directory);
         this._parse(path, function (e, data) {
