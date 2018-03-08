@@ -6,6 +6,7 @@ const request = require("request");
 const ali_oss_1 = require("ali-oss");
 const DEBUG = require("debug");
 const XmlBuilder = require("xml-js-builder");
+const async = require("async");
 const debug = DEBUG('oss');
 class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
     constructor(region, bucket, accessKeyId, accessKeySecret) {
@@ -60,7 +61,6 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
     }
     _parse(path, callback) {
         debug('EXEC: _parse', path);
-        debug('EXEC:isROOT ?', path.isRoot());
         let url = path.toString();
         url = url.startsWith('/') ? url.slice(1) : url;
         this._list({
@@ -72,10 +72,8 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
             }
             if (err)
                 return callback(webdav_server_1.v2.Errors.ResourceNotFound);
-            debug('List:', resources);
             let dir = url + (url.endsWith('/') ? '' : '/');
             let f = resources.filter(r => (r.path === url || r.path.startsWith(dir)));
-            debug('List:Filter:', f);
             if (f.length === 1) {
                 if (f[0].type.isFile) {
                     return callback(null, f[0]);
@@ -169,7 +167,8 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
         debug('EXEC: _readDir', path.toString());
         let url = path.toString(), dir;
         url = url.startsWith('/') ? url.slice(1) : url;
-        dir = url + (url.endsWith('/') ? '' : '/');
+        if (!path.isRoot())
+            dir = url + (url.endsWith('/') ? '' : '/');
         this._list({
             prefix: dir,
             marker: dir,
@@ -204,7 +203,7 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
         let url = path.toString(), dir;
         url = url.startsWith('/') ? url.slice(1) : url;
         debug('Delete Depth:', ctx.depth);
-        this._list({ prefix: url, delimiter: '/' }, [], (err, data) => {
+        this._list({ prefix: url }, [], (err, data) => {
             if (err)
                 return callback(err);
             if (data.length === 0)
@@ -230,10 +229,25 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
             if (type.isDirectory) {
                 from += from.endsWith('/') ? '' : '/';
                 to += to.endsWith('/') ? '' : '/';
+                this._list({ prefix: from }, [], (err, objs) => {
+                    if (err)
+                        return callback(err);
+                    let actions = objs.map(o => ({ from: o.path, to: to + o.path.slice(from.length) }));
+                    debug('Actions:', actions);
+                    async.eachLimit(actions, 10, (action, done) => {
+                        this.client.copy(action.to, action.from).then(done).catch(done);
+                    }, err => {
+                        if (err)
+                            return callback(err);
+                        this.client.deleteMulti(actions.map(a => a.from), { quiet: true }).then(callback).catch(callback);
+                    });
+                });
             }
-            this.client.copy(to, from).then(res => {
-                this._delete(path, { context: ctx.context, depth: 1 }, callback);
-            }).catch(callback);
+            else {
+                this.client.copy(to, from).then(res => {
+                    this._delete(path, { context: ctx.context, depth: -1 }, callback);
+                }).catch(callback);
+            }
         });
     }
     _move(from, to, ctx, callback) {

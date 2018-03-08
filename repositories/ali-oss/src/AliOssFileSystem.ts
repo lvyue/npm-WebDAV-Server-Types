@@ -92,7 +92,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
 
     protected _parse(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>) {
         debug('EXEC: _parse', path);
-        debug('EXEC:isROOT ?', path.isRoot())
         let url = path.toString();
         url = url.startsWith('/') ? url.slice(1) : url;
         this._list({
@@ -104,11 +103,8 @@ export class AliOssFileSystem extends webdav.FileSystem {
             }
             if (err)
                 return callback(webdav.Errors.ResourceNotFound);
-
-            debug('List:', resources)
             let dir = url + (url.endsWith('/') ? '' : '/')
             let f = resources.filter(r => (r.path === url || r.path.startsWith(dir)));
-            debug('List:Filter:', f)
             if (f.length === 1) {
                 if (f[0].type.isFile) {
                     return callback(null, f[0])
@@ -214,7 +210,8 @@ export class AliOssFileSystem extends webdav.FileSystem {
         debug('EXEC: _readDir', path.toString())
         let url = path.toString(), dir;
         url = url.startsWith('/') ? url.slice(1) : url;
-        dir = url + (url.endsWith('/') ? '' : '/');
+        if (!path.isRoot())
+            dir = url + (url.endsWith('/') ? '' : '/');
         this._list({
             prefix: dir,
             marker: dir,
@@ -280,10 +277,25 @@ export class AliOssFileSystem extends webdav.FileSystem {
             if (type.isDirectory) {
                 from += from.endsWith('/') ? '' : '/'
                 to += to.endsWith('/') ? '' : '/'
+                this._list({ prefix: from }, [], (err, objs) => {
+                    if (err)
+                        return callback(err);
+                    let actions = objs.map(o => ({ from: o.path, to: to + o.path.slice(from.length) }));
+                    debug('Actions:', actions);
+                    async.eachLimit(actions, 10, (action, done) => {
+                        this.client.copy(action.to, action.from).then(done).catch(done);
+                    }, err => {
+                        if (err)
+                            return callback(err);
+                        this.client.deleteMulti(actions.map(a => a.from), { quiet: true }).then(callback).catch(callback);
+                    })
+                })
+            } else { // 文件复制
+                this.client.copy(to, from).then(res => {
+                    this._delete(path, { context: ctx.context, depth: -1 }, callback)
+                }).catch(callback)
             }
-            this.client.copy(to, from).then(res => {
-                this._delete(path, { context: ctx.context, depth: 1 }, callback)
-            }).catch(callback)
+
         })
     }
 
