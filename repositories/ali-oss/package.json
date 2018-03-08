@@ -21,6 +21,7 @@
   "description": "GitHub file system for webdav-server",
   "dependencies": {
     "ali-oss": "^4.12.2",
+    "async": "^2.6.0",
     "debug": "^3.1.0",
     "request": "^2.81.0",
     "webdav-server": "^2.3.16",

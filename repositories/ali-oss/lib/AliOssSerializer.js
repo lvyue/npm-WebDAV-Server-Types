@@ -1,14 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-var AliOssFileSystem_1 = require("./AliOssFileSystem");
-var webdav_server_1 = require("webdav-server");
-var AliOssSerializer = /** @class */ (function () {
-    function AliOssSerializer() {
-    }
-    AliOssSerializer.prototype.uid = function () {
+const AliOssFileSystem_1 = require("./AliOssFileSystem");
+const webdav_server_1 = require("webdav-server");
+class AliOssSerializer {
+    uid() {
         return 'AliOssSerializer-1.0.0';
-    };
-    AliOssSerializer.prototype.serialize = function (fs, callback) {
+    }
+    serialize(fs, callback) {
         callback(null, {
             properties: fs.properties,
             region: fs.region,
@@ -16,13 +14,12 @@ var AliOssSerializer = /** @class */ (function () {
             accessKeyId: fs.accessKeyId,
             accessKeySecret: fs.accessKeySecret
         });
-    };
-    AliOssSerializer.prototype.unserialize = function (serializedData, callback) {
-        var fs = new AliOssFileSystem_1.AliOssFileSystem(serializedData.region, serializedData.bucket, serializedData.accessKeyId, serializedData.accessKeySecret);
-        for (var path in serializedData.properties)
+    }
+    unserialize(serializedData, callback) {
+        const fs = new AliOssFileSystem_1.AliOssFileSystem(serializedData.region, serializedData.bucket, serializedData.accessKeyId, serializedData.accessKeySecret);
+        for (const path in serializedData.properties)
             fs.properties[path] = new webdav_server_1.v2.LocalPropertyManager(serializedData.properties[path]);
         callback(null, fs);
-    };
-    return AliOssSerializer;
-}());
+    }
+}
 exports.AliOssSerializer = AliOssSerializer;
