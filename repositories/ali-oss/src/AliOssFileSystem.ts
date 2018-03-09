@@ -1,5 +1,5 @@
 import { AliOssSerializer } from './AliOssSerializer'
-import { Readable, Writable } from 'stream'
+import { Readable, Writable, Transform, Duplex } from 'stream'
 import { v2 as webdav } from 'webdav-server'
 import * as request from 'request'
 import { Wrapper as OSS } from 'ali-oss'
@@ -52,7 +52,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
     protected _list(options: ALiOssListOptions, data: AliOssAPIResource[], callback: webdav.ReturnCallback<AliOssAPIResource[]>) {
         this.client.list(options).then(res => {
             let e;
-            debug('_list:', res)
             if (res.statusCode === 404)
                 e = webdav.Errors.ResourceNotFound;
             data = data.concat((res.objects && res.objects.length > 0) ?
@@ -77,7 +76,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
                         size: 0,
                         type: webdav.ResourceType.Directory,
                     } as AliOssAPIResource)) : []);
-            debug('Data:', data)
             if (res.nextMarker) { // 继续搜索
                 options.marker = res.nextMarker;
                 this._list(options, data, callback);
@@ -85,13 +83,11 @@ export class AliOssFileSystem extends webdav.FileSystem {
                 callback(e, data);
             }
         }).catch(e => {
-            debug('ERROR:', e)
             callback(e);
         });
     }
 
     protected _parse(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>) {
-        debug('EXEC: _parse', path);
         let url = path.toString();
         url = url.startsWith('/') ? url.slice(1) : url;
         this._list({
@@ -120,49 +116,43 @@ export class AliOssFileSystem extends webdav.FileSystem {
 
     }
 
-    protected _openReadStream?(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void {
-        debug('EXEC: _openReadStream', path.toString())
+    protected _openReadStream(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void {
         if (path.isRoot())
             return callback(webdav.Errors.InvalidOperation);
-        this._parse(path, (e, data) => {
-            if (e)
-                return callback(e);
+        let oKey = path.toString();
+        oKey = oKey.startsWith('/') ? oKey.slice(1) : oKey;
+        this.client.getStream(oKey).then(res => { callback(null, res.stream) }).catch(callback)
+    }
 
-            if (data.constructor === Array)
-                return callback(webdav.Errors.InvalidOperation);
-
-            const stream = request({
-                url: (data as AliOssAPIResource).download_url,
-                method: 'GET',
-                qs: {
-                    'accessKeyId': this.accessKeyId,
-                    'accessKeySecret': this.accessKeySecret
-                },
-                headers: {
-                    'user-agent': 'webdav-server'
-                }
-            });
-            stream.end();
-            callback(null, (stream as any) as Readable);
-        })
+    protected _openWriteStream(path: webdav.Path, ctx: webdav.OpenWriteStreamInfo, callback: webdav.ReturnCallback<Writable>): void {
+        if (path.isRoot())
+            return callback(webdav.Errors.InvalidOperation);
+        const wStream = new Transform({
+            transform(chunk, encoding, cb) {
+                cb(null, chunk);
+            }
+        });
+        let oKey = path.toString();
+        oKey = oKey.startsWith('/') ? oKey.slice(1) : oKey;
+        this.client.putStream(oKey, wStream).then(debug).catch(e => {
+            wStream.emit('error', e);
+        });
+        callback(null, wStream);
     }
 
     protected _lockManager(path: webdav.Path, ctx: webdav.LockManagerInfo, callback: webdav.ReturnCallback<webdav.ILockManager>): void {
         debug('EXEC: _lockManager', path.toString())
-
         callback(null, new webdav.LocalLockManager());
     }
 
     protected _propertyManager(path: webdav.Path, ctx: webdav.PropertyManagerInfo, callback: webdav.ReturnCallback<webdav.IPropertyManager>): void {
         debug('EXEC: _propertyManager', path.toString())
-
         if (path.isRoot()) {
             let props = this.properties[path.toString()];
             if (!props) {
                 props = new webdav.LocalPropertyManager();
                 this.properties[path.toString()] = props;
             }
-
             return callback(null, props);
         }
 
@@ -207,7 +197,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
     }
 
     protected _readDir(path: webdav.Path, ctx: webdav.ReadDirInfo, callback: webdav.ReturnCallback<string[] | webdav.Path[]>): void {
-        debug('EXEC: _readDir', path.toString())
         let url = path.toString(), dir;
         url = url.startsWith('/') ? url.slice(1) : url;
         if (!path.isRoot())
@@ -226,21 +215,15 @@ export class AliOssFileSystem extends webdav.FileSystem {
     protected _create?(path: webdav.Path, ctx: webdav.CreateInfo, callback: webdav.SimpleCallback): void {
         if (path.isRoot())
             return callback(webdav.Errors.InvalidOperation);
-        this._parse(path, (err, resources) => {
-            if (err) {
-                let url = path.toString(), dir;
-                url = url.startsWith('/') ? url.slice(1) : url;
-                if (ctx.type.isDirectory) { // dir
-                    dir = url + (url.endsWith('/') ? '' : '/');
-                    this.client.put(dir, Buffer.alloc(0)).then(rs => (callback(null))).catch(callback);
-                } else { // file 
-
-                }
-                return;
-            }
-            callback(webdav.Errors.ResourceAlreadyExists)
-        });
-
+        let url = path.toString(), dir;
+        url = url.startsWith('/') ? url.slice(1) : url;
+        if (ctx.type.isDirectory) { // dir
+            dir = url + (url.endsWith('/') ? '' : '/');
+            this.client.put(dir, Buffer.alloc(0)).then(rs => (callback())).catch(callback);
+        } else { // file 
+            debug('Create:', path)
+            callback();
+        }
     }
 
     protected _delete(path: webdav.Path, ctx: webdav.DeleteInfo, callback: webdav.SimpleCallback): void {
@@ -248,7 +231,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
             return callback(webdav.Errors.InvalidOperation);
         let url = path.toString(), dir;
         url = url.startsWith('/') ? url.slice(1) : url;
-        debug('Delete Depth:', ctx.depth);
         this._list({ prefix: url }, [], (err, data) => {
             if (err)
                 return callback(err);
@@ -258,7 +240,7 @@ export class AliOssFileSystem extends webdav.FileSystem {
             let f = data.filter(r => (r.path === url || r.path.startsWith(dir)));
             if (f.length == 0)
                 return callback();
-            this.client.deleteMulti(f.map(r => r.path), { quiet: true }).then(res => { debug('Delete Res:', res); callback }).then(callback);
+            this.client.deleteMulti(f.map(r => r.path), { quiet: true }).then(res => { callback() }).then(callback);
         });
     }
 
@@ -281,13 +263,14 @@ export class AliOssFileSystem extends webdav.FileSystem {
                     if (err)
                         return callback(err);
                     let actions = objs.map(o => ({ from: o.path, to: to + o.path.slice(from.length) }));
-                    debug('Actions:', actions);
                     async.eachLimit(actions, 10, (action, done) => {
-                        this.client.copy(action.to, action.from).then(done).catch(done);
+                        this.client.copy(action.to, action.from).then(() => { done() }).catch(done);
                     }, err => {
                         if (err)
                             return callback(err);
-                        this.client.deleteMulti(actions.map(a => a.from), { quiet: true }).then(callback).catch(callback);
+                        this.client.deleteMulti(actions.map(a => a.from), { quiet: true }).then(() => { callback() }).catch(e => {
+                            callback(e)
+                        });
                     })
                 })
             } else { // 文件复制
@@ -303,13 +286,11 @@ export class AliOssFileSystem extends webdav.FileSystem {
     protected _move(from: webdav.Path, to: webdav.Path, ctx: webdav.MoveInfo, callback: webdav.SimpleCallback): void {
         if (from.isRoot())
             return callback(webdav.Errors.InvalidOperation);
-        console.log(from, to);
         let fName = from.paths.slice(-1).join(''), tName = to.paths.slice(-1).join('');
         if (fName !== tName && from.paths.slice(0, -1).join('/') === to.paths.slice(1, -1).join('/')) { // 重命名
             return this._rename(from, tName, { context: ctx.context, destinationPath: to }, callback);
         } else { // 移动
             this._type(from, { context: ctx.context }, (err, type) => {
-                console.log(err, type)
                 if (err)
                     return callback(err);
                 if (!type)
@@ -321,12 +302,27 @@ export class AliOssFileSystem extends webdav.FileSystem {
                 if (type.isDirectory) {
                     srcPath += srcPath.endsWith('/') ? '' : '/'
                     destPath += destPath.endsWith('/') ? '' : '/'
+                    this._list({ prefix: srcPath }, [], (err, objs) => {
+                        if (err)
+                            return callback(err);
+                        let actions = objs.map(o => ({ from: o.path, to: destPath + o.path.slice(srcPath.length) }));
+                        async.eachLimit(actions, 10, (action, done) => {
+                            this.client.copy(action.to, action.from).then(() => { done() }).catch(done);
+                        }, err => {
+                            if (err)
+                                return callback(err);
+                            this.client.deleteMulti(actions.map(a => a.from), { quiet: true }).then(() => { callback() }).catch(e => {
+                                callback(e)
+                            });
+                        })
+                    })
+                } else {
+                    console.log(destPath, srcPath);
+                    this.client.copy(destPath, srcPath).then(res => {
+                        console.log(res)
+                        this._delete(from, { context: ctx.context, depth: 1 }, callback)
+                    }).catch(callback)
                 }
-                console.log(destPath, srcPath);
-                this.client.copy(destPath, srcPath).then(res => {
-                    console.log(res)
-                    this._delete(from, { context: ctx.context, depth: 1 }, callback)
-                }).catch(callback)
             });
         }
     }
@@ -348,7 +344,6 @@ export class AliOssFileSystem extends webdav.FileSystem {
     // }
 
     protected _size(path: webdav.Path, ctx: webdav.SizeInfo, callback: webdav.ReturnCallback<number>): void {
-        debug('EXEC: _size', path.toString())
         if (path.isRoot())
             return callback(webdav.Errors.InvalidOperation);
         this._parse(path, (e, data) => {

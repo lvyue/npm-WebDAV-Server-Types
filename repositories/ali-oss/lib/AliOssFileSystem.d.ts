@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 import { v2 as webdav } from 'webdav-server';
 import { Wrapper as OSS } from 'ali-oss';
 export interface AliOssAPIResource {
@@ -42,7 +42,8 @@ export declare class AliOssFileSystem extends webdav.FileSystem {
     constructor(region: string, bucket: string, accessKeyId: string, accessKeySecret: string);
     protected _list(options: ALiOssListOptions, data: AliOssAPIResource[], callback: webdav.ReturnCallback<AliOssAPIResource[]>): void;
     protected _parse(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>): void;
-    protected _openReadStream?(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void;
+    protected _openReadStream(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void;
+    protected _openWriteStream(path: webdav.Path, ctx: webdav.OpenWriteStreamInfo, callback: webdav.ReturnCallback<Writable>): void;
     protected _lockManager(path: webdav.Path, ctx: webdav.LockManagerInfo, callback: webdav.ReturnCallback<webdav.ILockManager>): void;
     protected _propertyManager(path: webdav.Path, ctx: webdav.PropertyManagerInfo, callback: webdav.ReturnCallback<webdav.IPropertyManager>): void;
     protected _readDir(path: webdav.Path, ctx: webdav.ReadDirInfo, callback: webdav.ReturnCallback<string[] | webdav.Path[]>): void;
