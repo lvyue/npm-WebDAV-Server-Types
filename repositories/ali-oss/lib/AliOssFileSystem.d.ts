@@ -40,6 +40,7 @@ export declare class AliOssFileSystem extends webdav.FileSystem {
         };
     };
     constructor(region: string, bucket: string, accessKeyId: string, accessKeySecret: string);
+    protected _get(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource>): void;
     protected _list(options: ALiOssListOptions, data: AliOssAPIResource[], callback: webdav.ReturnCallback<AliOssAPIResource[]>): void;
     protected _parse(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource[] | AliOssAPIResource>): void;
     protected _openReadStream(path: webdav.Path, ctx: webdav.OpenReadStreamInfo, callback: webdav.ReturnCallback<Readable>): void;
@@ -52,5 +53,9 @@ export declare class AliOssFileSystem extends webdav.FileSystem {
     protected _rename(path: webdav.Path, name: string, ctx: webdav.RenameInfo, callback: webdav.ReturnCallback<boolean>): void;
     protected _move(from: webdav.Path, to: webdav.Path, ctx: webdav.MoveInfo, callback: webdav.SimpleCallback): void;
     protected _size(path: webdav.Path, ctx: webdav.SizeInfo, callback: webdav.ReturnCallback<number>): void;
+    protected _etag(path: webdav.Path, ctx: webdav.ETagInfo, callback: webdav.ReturnCallback<string>): void;
+    protected _creationDate?(path: webdav.Path, ctx: webdav.CreationDateInfo, callback: webdav.ReturnCallback<number>): void;
+    protected _lastModifiedDate?(path: webdav.Path, ctx: webdav.LastModifiedDateInfo, callback: webdav.ReturnCallback<number>): void;
+    protected _displayName?(path: webdav.Path, ctx: webdav.DisplayNameInfo, callback: webdav.ReturnCallback<string>): void;
     protected _type(path: webdav.Path, ctx: webdav.TypeInfo, callback: webdav.ReturnCallback<webdav.ResourceType>): void;
 }

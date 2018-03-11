@@ -5,7 +5,6 @@ const stream_1 = require("stream");
 const webdav_server_1 = require("webdav-server");
 const ali_oss_1 = require("ali-oss");
 const DEBUG = require("debug");
-const XmlBuilder = require("xml-js-builder");
 const async = require("async");
 const debug = DEBUG('oss');
 class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
@@ -18,6 +17,25 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
         this.properties = {};
         this.cache = {};
         this.client = new ali_oss_1.Wrapper({ region, bucket, accessKeyId, accessKeySecret });
+    }
+    _get(path, callback) {
+        let url = path.toString();
+        url = url.startsWith('/') ? url.slice(1) : url;
+        this._list({
+            prefix: url,
+            delimiter: '/'
+        }, [], (err, resources) => {
+            if (err)
+                return callback(webdav_server_1.v2.Errors.ResourceNotFound);
+            let dir = url + (url.endsWith('/') ? '' : '/');
+            let f = resources.filter(r => (r.path === url || r.path === dir));
+            if (f.length === 1) {
+                return callback(null, f[0]);
+            }
+            else {
+                callback(webdav_server_1.v2.Errors.ResourceNotFound);
+            }
+        });
     }
     _list(options, data, callback) {
         this.client.list(options).then(res => {
@@ -114,47 +132,14 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
     }
     _propertyManager(path, ctx, callback) {
         debug('EXEC: _propertyManager', path.toString());
-        if (path.isRoot()) {
-            let props = this.properties[path.toString()];
-            if (!props) {
-                props = new webdav_server_1.v2.LocalPropertyManager();
-                this.properties[path.toString()] = props;
+        this._get(path, (err, data) => {
+            if (err || !data)
+                return callback(webdav_server_1.v2.Errors.ResourceNotFound);
+            let props = new webdav_server_1.v2.LocalPropertyManager();
+            for (let prop in data) {
+                props[prop] = data[prop];
             }
             return callback(null, props);
-        }
-        this._parse(path.getParent(), (e, data) => {
-            if (e)
-                return callback(e);
-            let props = this.properties[path.toString()];
-            if (!props) {
-                props = new webdav_server_1.v2.LocalPropertyManager();
-                this.properties[path.toString()] = props;
-            }
-            const info = data;
-            for (const file of info)
-                if (file.name === path.fileName()) {
-                    const alioss = [];
-                    const create = (name, value) => {
-                        const el = new XmlBuilder.XMLElementBuilder(name);
-                        if (value !== null && value !== undefined)
-                            el.add(value);
-                        alioss.push(el);
-                    };
-                    create('json', JSON.stringify(file));
-                    create('path', file.path);
-                    create('etag', file.etag);
-                    create('size', file.size);
-                    create('url', file.url);
-                    create('download-url', file.download_url);
-                    const links = new XmlBuilder.XMLElementBuilder('links');
-                    for (const name in file._links)
-                        links.ele(name).add(file._links[name]);
-                    props.setProperty('alioss', alioss, undefined, (e) => {
-                        callback(e, props);
-                    });
-                    return;
-                }
-            callback(webdav_server_1.v2.Errors.ResourceNotFound, props);
         });
     }
     _readDir(path, ctx, callback) {
@@ -283,32 +268,58 @@ class AliOssFileSystem extends webdav_server_1.v2.FileSystem {
             });
         }
     }
-    // protected _creationDate(path: webdav.Path, ctx: webdav.CreationDateInfo, callback: webdav.ReturnCallback<number>): void {
-    //     this._lastModifiedDate(path, {
-    //         context: ctx.context
-    //     }, callback);
-    // }
-    // protected _lastModifiedDate(path: webdav.Path, ctx: webdav.LastModifiedDateInfo, callback: webdav.ReturnCallback<number>): void {
-    //     if (path.isRoot())
-    //         return callback(null, 0);
-    //     this._parse(path, (err, resources) => {
-    //         callback(err ? webdav.Errors.ResourceNotFound : null, !resources ? 0 : date.valueOf());
-    //     })
-    // }
     _size(path, ctx, callback) {
         if (path.isRoot())
-            return callback(webdav_server_1.v2.Errors.InvalidOperation);
-        this._parse(path, (e, data) => {
-            callback(e ? webdav_server_1.v2.Errors.ResourceNotFound : null, data && data.constructor !== Array ? data.size : undefined);
+            return callback(null, undefined);
+        this._get(path, (err, resource) => {
+            if (err || !resource)
+                return callback(err || webdav_server_1.v2.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? undefined : resource.size);
+        });
+    }
+    _etag(path, ctx, callback) {
+        if (path.isRoot())
+            return callback(null, undefined);
+        this._get(path, (err, resource) => {
+            if (err || !resource)
+                return callback(err || webdav_server_1.v2.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? undefined : resource.etag);
+        });
+    }
+    _creationDate(path, ctx, callback) {
+        if (path.isRoot())
+            return callback(null, Date.now());
+        this._get(path, (err, resource) => {
+            if (err || !resource)
+                return callback(err || webdav_server_1.v2.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? Date.now() : new Date(resource.last_modified).getTime());
+        });
+    }
+    _lastModifiedDate(path, ctx, callback) {
+        if (path.isRoot())
+            return callback(null, Date.now());
+        this._get(path, (err, resource) => {
+            if (err || !resource)
+                return callback(err || webdav_server_1.v2.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? Date.now() : new Date(resource.last_modified).getTime());
+        });
+    }
+    _displayName(path, ctx, callback) {
+        if (path.isRoot())
+            return callback(null, '/');
+        this._get(path, (err, resource) => {
+            if (err || !resource)
+                return callback(err || webdav_server_1.v2.Errors.ResourceNotFound);
+            return callback(null, resource.name);
         });
     }
     _type(path, ctx, callback) {
         if (path.isRoot())
             return callback(null, webdav_server_1.v2.ResourceType.Directory);
-        this._parse(path, (e, data) => {
+        this._get(path, (e, data) => {
             if (e)
                 return callback(webdav_server_1.v2.Errors.ResourceNotFound);
-            callback(e, data ? data.constructor === Array ? webdav_server_1.v2.ResourceType.Directory : webdav_server_1.v2.ResourceType.File : null);
+            callback(e, data ? data.type : null);
         });
     }
 }

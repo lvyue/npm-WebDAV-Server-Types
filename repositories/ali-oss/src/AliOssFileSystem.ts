@@ -6,6 +6,7 @@ import { Wrapper as OSS } from 'ali-oss'
 import * as DEBUG from 'debug'
 import * as XmlBuilder from 'xml-js-builder'
 import * as async from 'async'
+
 const debug = DEBUG('oss');
 
 export interface AliOssAPIResource {
@@ -48,8 +49,27 @@ export class AliOssFileSystem extends webdav.FileSystem {
         this.client = new OSS({ region, bucket, accessKeyId, accessKeySecret });
     }
 
+    protected _get(path: webdav.Path, callback: webdav.ReturnCallback<AliOssAPIResource>): void {
+        let url = path.toString();
+        url = url.startsWith('/') ? url.slice(1) : url;
+        this._list({
+            prefix: url,
+            delimiter: '/'
+        }, [], (err, resources) => {
+            if (err)
+                return callback(webdav.Errors.ResourceNotFound);
+            let dir = url + (url.endsWith('/') ? '' : '/')
+            let f = resources.filter(r => (r.path === url || r.path === dir));
+            if (f.length === 1) { // 只有一个
+                return callback(null, f[0]);
+            } else {
+                callback(webdav.Errors.ResourceNotFound);
+            }
+        });
+    }
 
-    protected _list(options: ALiOssListOptions, data: AliOssAPIResource[], callback: webdav.ReturnCallback<AliOssAPIResource[]>) {
+
+    protected _list(options: ALiOssListOptions, data: AliOssAPIResource[], callback: webdav.ReturnCallback<AliOssAPIResource[]>): void {
         this.client.list(options).then(res => {
             let e;
             if (res.statusCode === 404)
@@ -147,52 +167,14 @@ export class AliOssFileSystem extends webdav.FileSystem {
 
     protected _propertyManager(path: webdav.Path, ctx: webdav.PropertyManagerInfo, callback: webdav.ReturnCallback<webdav.IPropertyManager>): void {
         debug('EXEC: _propertyManager', path.toString())
-        if (path.isRoot()) {
-            let props = this.properties[path.toString()];
-            if (!props) {
-                props = new webdav.LocalPropertyManager();
-                this.properties[path.toString()] = props;
+        this._get(path, (err, data) => {
+            if (err || !data)
+                return callback(webdav.Errors.ResourceNotFound);
+            let props = new webdav.LocalPropertyManager();
+            for (let prop in data) {
+                props[prop] = data[prop];
             }
             return callback(null, props);
-        }
-
-        this._parse(path.getParent(), (e, data) => {
-            if (e)
-                return callback(e);
-
-            let props = this.properties[path.toString()];
-            if (!props) {
-                props = new webdav.LocalPropertyManager();
-                this.properties[path.toString()] = props;
-            }
-
-            const info = data as AliOssAPIResource[];
-            for (const file of info)
-                if (file.name === path.fileName()) {
-                    const alioss = [];
-                    const create = (name: string, value: string | number) => {
-                        const el = new XmlBuilder.XMLElementBuilder(name);
-                        if (value !== null && value !== undefined)
-                            el.add(value);
-                        alioss.push(el);
-                    }
-                    create('json', JSON.stringify(file));
-                    create('path', file.path);
-                    create('etag', file.etag);
-                    create('size', file.size);
-                    create('url', file.url);
-                    create('download-url', file.download_url);
-                    const links = new XmlBuilder.XMLElementBuilder('links');
-                    for (const name in file._links)
-                        links.ele(name).add(file._links[name]);
-
-                    props.setProperty('alioss', alioss, undefined, (e) => {
-                        callback(e, props);
-                    });
-                    return;
-                }
-
-            callback(webdav.Errors.ResourceNotFound, props);
         })
     }
 
@@ -327,37 +309,63 @@ export class AliOssFileSystem extends webdav.FileSystem {
         }
     }
 
-
-    // protected _creationDate(path: webdav.Path, ctx: webdav.CreationDateInfo, callback: webdav.ReturnCallback<number>): void {
-    //     this._lastModifiedDate(path, {
-    //         context: ctx.context
-    //     }, callback);
-    // }
-
-    // protected _lastModifiedDate(path: webdav.Path, ctx: webdav.LastModifiedDateInfo, callback: webdav.ReturnCallback<number>): void {
-    //     if (path.isRoot())
-    //         return callback(null, 0);
-
-    //     this._parse(path, (err, resources) => {
-    //         callback(err ? webdav.Errors.ResourceNotFound : null, !resources ? 0 : date.valueOf());
-    //     })
-    // }
-
     protected _size(path: webdav.Path, ctx: webdav.SizeInfo, callback: webdav.ReturnCallback<number>): void {
         if (path.isRoot())
-            return callback(webdav.Errors.InvalidOperation);
-        this._parse(path, (e, data) => {
-            callback(e ? webdav.Errors.ResourceNotFound : null, data && data.constructor !== Array ? (data as AliOssAPIResource).size : undefined);
+            return callback(null, undefined);
+        this._get(path, (err, resource) => {
+            if (err || !resource) // 未找到
+                return callback(err || webdav.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? undefined : resource.size);
+        })
+    }
+
+    protected _etag(path: webdav.Path, ctx: webdav.ETagInfo, callback: webdav.ReturnCallback<string>): void {
+        if (path.isRoot())
+            return callback(null, undefined);
+        this._get(path, (err, resource) => {
+            if (err || !resource) // 未找到
+                return callback(err || webdav.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? undefined : resource.etag);
+        })
+    }
+
+    protected _creationDate?(path: webdav.Path, ctx: webdav.CreationDateInfo, callback: webdav.ReturnCallback<number>): void {
+        if (path.isRoot())
+            return callback(null, Date.now());
+        this._get(path, (err, resource) => {
+            if (err || !resource) // 未找到
+                return callback(err || webdav.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? Date.now() : new Date(resource.last_modified).getTime());
+        });
+    }
+
+    protected _lastModifiedDate?(path: webdav.Path, ctx: webdav.LastModifiedDateInfo, callback: webdav.ReturnCallback<number>): void {
+        if (path.isRoot())
+            return callback(null, Date.now());
+        this._get(path, (err, resource) => {
+            if (err || !resource) // 未找到
+                return callback(err || webdav.Errors.ResourceNotFound);
+            return callback(err, resource.type.isDirectory ? Date.now() : new Date(resource.last_modified).getTime());
+        });
+    }
+
+    protected _displayName?(path: webdav.Path, ctx: webdav.DisplayNameInfo, callback: webdav.ReturnCallback<string>): void {
+        if (path.isRoot())
+            return callback(null, '/');
+        this._get(path, (err, resource) => {
+            if (err || !resource) // 未找到
+                return callback(err || webdav.Errors.ResourceNotFound);
+            return callback(null, resource.name);
         })
     }
 
     protected _type(path: webdav.Path, ctx: webdav.TypeInfo, callback: webdav.ReturnCallback<webdav.ResourceType>): void {
         if (path.isRoot())
             return callback(null, webdav.ResourceType.Directory);
-        this._parse(path, (e, data) => {
+        this._get(path, (e, data) => {
             if (e)
                 return callback(webdav.Errors.ResourceNotFound);
-            callback(e, data ? data.constructor === Array ? webdav.ResourceType.Directory : webdav.ResourceType.File : null);
+            callback(e, data ? data.type : null);
         })
     }
 }
